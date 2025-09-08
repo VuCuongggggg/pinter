@@ -9,7 +9,7 @@ from telethon import TelegramClient, events
 # ====== CONFIG ======
 api_id = 26652314
 api_hash = '16e1dd8417c00068767fc6fc9a65f6b7'
-target_group = -4820398082
+target_group = -4820398082  # Group ID bạn muốn gửi video vào
 
 # ====== TELETHON SETUP ======
 client = TelegramClient('session', api_id, api_hash)
@@ -57,32 +57,22 @@ def extract_pinterest_media(pin_url):
         mp4_url = video_url.replace('/hls/', '/720p/').replace('.m3u8', '.mp4')
         return 'video', mp4_url
 
-    img_tag = soup.find("meta", property="og:image") or soup.find("img")
-    if img_tag and 'content' in img_tag.attrs:
-        return 'image', img_tag['content']
-    elif img_tag and 'src' in img_tag.attrs:
+    img_tag = soup.find("img")
+    if img_tag and 'src' in img_tag.attrs:
         return 'image', img_tag['src']
 
     return None, None
 
-# ====== HANDLE ANY MESSAGE WITH PINTEREST LINK ======
-@client.on(events.NewMessage)
+# ====== TELEGRAM COMMAND HANDLER ======
+@client.on(events.NewMessage(pattern='/p '))
 async def handler(event):
     try:
-        text = event.raw_text
-        if 'pinterest.com' not in text and 'pin.it' not in text:
-            return
-
-        link_match = re.search(r'(https?://\S+)', text)
-        if not link_match:
-            return
-        link = link_match.group(1).strip()
-
+        link = event.raw_text.split(' ', 1)[1].strip()
         log(f'Xử lý link: {link}')
         file_type, url = extract_pinterest_media(link)
 
         if not url:
-            await event.reply("❌ Không tìm thấy ảnh hoặc video hợp lệ.")
+            await event.reply("❌ Không tìm thấy media trong link.")
             return
 
         filename = datetime.now().strftime("%d%m%H%M%S")
@@ -92,7 +82,7 @@ async def handler(event):
             filename += '.jpg'
 
         if download_file(url, filename):
-            await client.send_file(target_group, filename)
+            await client.send_file(target_group, filename, caption=f"🎉 Tải từ: {link}")
             os.remove(filename)
             log(f'🧹 Đã xoá file: {filename}')
         else:
@@ -104,5 +94,5 @@ async def handler(event):
 
 # ====== START BOT ======
 with client:
-    log("🤖 Bot đã chạy — chỉ cần gửi link Pinterest để tải ảnh/video.")
+    log("🤖 Bot đã chạy — gửi /p <link Pinterest> để tải video hoặc ảnh.")
     client.run_until_disconnected()
