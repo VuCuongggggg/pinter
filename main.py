@@ -18,8 +18,7 @@ def load_config():
     """Load configuration from file or create new one if not exists"""
     default_config = {
         'api_id': None,
-        'api_hash': None,
-        'target_group': None
+        'api_hash': None
     }
     
     if os.path.exists(CONFIG_FILE):
@@ -55,14 +54,6 @@ def setup_config():
     elif config['api_hash'] is None:
         raise ValueError("API Hash is required for first setup")
 
-    # Get Target Group
-    current_target = config.get('target_group', 'Not set')
-    target_group = input(f"Enter Target Group ID [{current_target}]: ").strip()
-    if target_group:
-        config['target_group'] = int(target_group)
-    elif config['target_group'] is None:
-        raise ValueError("Target Group ID is required for first setup")
-
     # Save the configuration
     save_config(config)
     print("Configuration saved successfully!")
@@ -83,7 +74,18 @@ def get_config():
 config = get_config()
 api_id = config['api_id']
 api_hash = config['api_hash']
-target_group = config['target_group']
+
+# ====== LOGGING SETUP ======
+log_format = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_format)
+logger = logging.getLogger('PinterestBot')
+logger.addHandler(console_handler)
+logger.setLevel(logging.INFO)
+
+def log(msg, level=logging.INFO):
+    """Enhanced logging function"""
+    logger.log(level, msg)
 
 # ====== TELETHON SETUP ======
 client = TelegramClient('session', api_id, api_hash)
@@ -215,23 +217,45 @@ async def extract_pinterest_media(pin_url):
     
     return None, None
 
+# ====== COMMAND HANDLERS ======
+@client.on(events.NewMessage(pattern='/start'))
+async def start_handler(event):
+    """Handle /start command"""
+    chat = await event.get_chat()
+    log(f'Bot started in chat: {chat.id} ({"Group" if hasattr(chat, "title") else "Private"})')
+    await event.reply(
+        "👋 Xin chào! Tôi là bot tải ảnh/video từ Pinterest.\n"
+        "Chỉ cần gửi link Pinterest, tôi sẽ tự động tải và gửi lại media cho bạn!\n"
+        "🔗 Hỗ trợ cả link pinterest.com và pin.it"
+    )
+
 # ====== HANDLE ANY MESSAGE WITH PINTEREST LINK ======
 @client.on(events.NewMessage)
 async def handler(event):
     try:
+        # Ignore commands
+        if event.raw_text.startswith('/'):
+            return
+
         text = event.raw_text
         if 'pinterest.com' not in text and 'pin.it' not in text:
             return
 
+        chat = await event.get_chat()
+        chat_info = f'Chat ID: {chat.id} ({"Group" if hasattr(chat, "title") else "Private"})'
+        
         # Tìm tất cả các link Pinterest trong tin nhắn
         links = re.findall(r'(https?://(?:www\.)?(?:pinterest\.com/[^\s]+|pin\.it/[^\s]+))', text)
         if not links:
             return
 
+        log(f'Phát hiện {len(links)} link Pinterest trong {chat_info}')
+        await event.reply("🔍 Đang xử lý link Pinterest của bạn...")
+
         processed = []
         for link in links:
             try:
-                log(f'Xử lý link: {link}')
+                log(f'Xử lý link: {link} trong {chat_info}')
                 file_type, url = await extract_pinterest_media(link)
 
                 if not url:
@@ -245,15 +269,17 @@ async def handler(event):
 
                 if await download_file(url, filename):
                     processed.append(filename)
+                    log(f'✅ Đã tải thành công: {url}')
                 else:
-                    log(f'❌ Không thể tải: {url}')
+                    log(f'❌ Không thể tải: {url}', level=logging.ERROR)
 
             except Exception as e:
-                log(f'Lỗi khi xử lý {link}: {e}')
+                log(f'❌ Lỗi khi xử lý {link}: {e}', level=logging.ERROR)
 
         if processed:
             # Gửi tất cả file đã xử lý
-            await client.send_file(target_group, processed)
+            await event.reply(file=processed)
+            log(f'📤 Đã gửi {len(processed)} file trong {chat_info}')
             
             # Dọn dẹp file
             for filename in processed:
@@ -261,15 +287,38 @@ async def handler(event):
                     os.remove(filename)
                     log(f'🧹 Đã xoá file: {filename}')
                 except Exception as e:
-                    log(f'Lỗi khi xoá file {filename}: {e}')
+                    log(f'Lỗi khi xoá file {filename}: {e}', level=logging.ERROR)
         else:
             await event.reply("❌ Không tìm thấy ảnh hoặc video hợp lệ.")
+            log(f'⚠️ Không tìm thấy media hợp lệ trong {chat_info}', level=logging.WARNING)
 
     except Exception as e:
         await event.reply(f"❌ Đã xảy ra lỗi: {e}")
-        log(f'Lỗi: {e}')
+        log(f'❌ Lỗi: {e}', level=logging.ERROR)
 
 # ====== START BOT ======
-with client:
-    log("🤖 Bot đã chạy — chỉ cần gửi link Pinterest để tải ảnh/video.")
-    client.run_until_disconnected()
+async def main():
+    try:
+        log("🤖 Bot đang khởi động...")
+        await client.start()
+        
+        me = await client.get_me()
+        log(f"✅ Bot đã sẵn sàng! (@{me.username})")
+        log("📝 Sử dụng /start trong chat để bắt đầu")
+        log("⌛ Đang chờ tin nhắn...")
+        
+        await client.run_until_disconnected()
+    except Exception as e:
+        log(f"❌ Lỗi khởi động bot: {e}", level=logging.ERROR)
+    finally:
+        if session:
+            await session.close()
+
+# Run the bot
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log("👋 Bot đã dừng bởi người dùng", level=logging.WARNING)
+    except Exception as e:
+        log(f"❌ Lỗi không mong muốn: {e}", level=logging.ERROR)
