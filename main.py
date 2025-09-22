@@ -5,6 +5,9 @@ import json
 import aiohttp
 import logging
 import asyncio
+import ffmpeg
+import cv2
+import numpy as np
 from datetime import datetime
 from bs4 import BeautifulSoup
 from telethon import TelegramClient, events
@@ -103,6 +106,90 @@ async def get_session():
             )
     return session
 
+# ====== ENHANCE FUNCTIONS ======
+async def enhance_image(input_path, output_path=None):
+    """Nâng cao chất lượng ảnh sử dụng các kỹ thuật xử lý ảnh"""
+    if output_path is None:
+        output_path = input_path
+
+    try:
+        # Đọc ảnh
+        img = Image.open(input_path)
+        
+        # Chuyển đổi sang RGB nếu cần
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        
+        # Tính toán kích thước mới giữ nguyên tỷ lệ
+        width, height = img.size
+        scale = min(3840/width, 2160/height)
+        if scale > 1:  # Chỉ nâng cấp nếu ảnh nhỏ hơn 4K
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            # Sử dụng Lanczos để nâng cao chất lượng
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            log(f'📈 Đã nâng cấp độ phân giải lên {new_width}x{new_height}')
+        
+        # Tăng độ nét
+        img = img.filter(Image.SHARPEN)
+        
+        # Lưu với chất lượng tối đa
+        img.save(output_path, 'JPEG', quality=100, optimize=True, subsampling=0)
+        log('✨ Đã nâng cao chất lượng ảnh thành công')
+        return True
+    except Exception as e:
+        log(f'⚠️ Lỗi khi nâng cao chất lượng ảnh: {e}')
+        return False
+
+async def enhance_video(input_path, output_path=None):
+    """Nâng cao chất lượng video sử dụng ffmpeg"""
+    if output_path is None:
+        output_path = input_path + '.enhanced.mp4'
+    
+    try:
+        # Đọc thông tin video
+        probe = ffmpeg.probe(input_path)
+        video_info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
+        width = int(video_info['width'])
+        height = int(video_info['height'])
+        
+        # Tính toán kích thước mới giữ nguyên tỷ lệ
+        scale = min(3840/width, 2160/height)
+        new_width = int(width * scale) if scale > 1 else width
+        new_height = int(height * scale) if scale > 1 else height
+        
+        # Xây dựng pipeline ffmpeg
+        stream = ffmpeg.input(input_path)
+        
+        # Nâng cao chất lượng video
+        stream = ffmpeg.filter(stream, 'scale', width=new_width, height=new_height)
+        stream = ffmpeg.filter(stream, 'unsharp', '5:5:1.0:5:5:0.0')  # Tăng độ nét
+        stream = ffmpeg.filter(stream, 'deblock')  # Giảm nhiễu block
+        
+        # Cài đặt encoder với chất lượng cao
+        stream = ffmpeg.output(stream, output_path,
+                             vcodec='libx264',
+                             preset='medium',
+                             crf=18,  # Chất lượng cao (0-51, thấp hơn = tốt hơn)
+                             acodec='copy')  # Giữ nguyên audio
+        
+        # Chạy ffmpeg
+        log('🎥 Đang nâng cao chất lượng video...')
+        ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+        log('✨ Đã nâng cao chất lượng video thành công')
+        
+        # Thay thế file gốc nếu cần
+        if output_path != input_path:
+            os.replace(output_path, input_path)
+        
+        return True
+    except ffmpeg.Error as e:
+        log(f'⚠️ Lỗi ffmpeg khi nâng cao chất lượng video: {e.stderr.decode()}')
+        return False
+    except Exception as e:
+        log(f'⚠️ Lỗi khi nâng cao chất lượng video: {e}')
+        return False
+
 # ====== DOWNLOAD FUNCTION ======
 async def download_file(url, filename, max_retries=3):
     log(f'⬇️ Đang tải: {url}')
@@ -146,6 +233,10 @@ async def download_file(url, filename, max_retries=3):
                     log('💾 Đang lưu ảnh chất lượng cao...')
                     img.save(filename, 'JPEG', quality=100, optimize=True, subsampling=0)
                     
+                    # Nâng cao chất lượng ảnh
+                    log('🎨 Đang nâng cao chất lượng ảnh...')
+                    await enhance_image(filename)
+                    
                     log(f'✨ Đã lưu ảnh chất lượng cao: {filename}')
                 else:
                     # For videos and other files
@@ -160,6 +251,12 @@ async def download_file(url, filename, max_retries=3):
                                 log(f'\r📥 Tải xuống: {progress:.1f}% ({downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f}MB)', end='')
                 
                 log(f'✅ Tải xuống hoàn tất: {filename}')
+                
+                # Nâng cao chất lượng video
+                if filename.lower().endswith(('.mp4', '.mov', '.avi')):
+                    log('🎥 Đang nâng cao chất lượng video...')
+                    await enhance_video(filename)
+                
                 return True
             
         except Exception as e:
@@ -502,9 +599,7 @@ async def start_handler(event):
     chat = await event.get_chat()
     log(f'Bot started in chat: {chat.id} ({"Group" if hasattr(chat, "title") else "Private"})')
     await event.reply(
-        "👋 Xin chào! Tôi là bot tải ảnh/video từ Pinterest.\n"
-        "Chỉ cần gửi link Pinterest, tôi sẽ tự động tải và gửi lại media cho bạn!\n"
-        "🔗 Hỗ trợ cả link pinterest.com và pin.it"
+        "👋"
     )
 
 # ====== HANDLE ANY MESSAGE WITH PINTEREST LINK ======
@@ -527,7 +622,7 @@ async def handler(event):
         if not links:
             return
         log(f'Phát hiện {len(links)} link Pinterest trong {chat_info}')
-        await event.reply("🔍 Đang xử lý link Pinterest của bạn...")
+        processing_msg = await event.reply("🔍 Đang xử lý link Pinterest của bạn...")
 
         processed = []
         for link in links:
@@ -573,6 +668,8 @@ async def handler(event):
                         if os.path.exists(filename):
                             os.remove(filename)
                 
+                # Xóa tin nhắn "đang xử lý"
+                await processing_msg.delete()
                 log(f'✨ Đã xử lý xong {len(processed)} file trong {chat_info}')
             except Exception as e:
                 log(f'❌ Lỗi khi gửi files: {e}')
