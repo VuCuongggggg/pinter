@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 import os
 import re
 import json
@@ -183,7 +183,7 @@ async def extract_pinterest_media(pin_url):
         'Accept': '*/*',
         'Accept-Encoding': 'gzip, deflate, br',
         'Connection': 'keep-alive',
-        'Cookie': '_auth=1'  # Thêm cookie để cải thiện khả năng truy cập
+        'Cookie': '_auth=1'
     }
     session = await get_session()
     log(f'➡ Đang xử lý link: {pin_url}')
@@ -247,7 +247,6 @@ async def extract_pinterest_media(pin_url):
             for meta in soup.find_all('meta', property=['og:type', 'og:video:type']):
                 if 'video' in meta.get('content', '').lower():
                     is_video = True
-                    log('🎥 Phát hiện video qua meta tags...')
                     break
 
             # Phương pháp 2: Kiểm tra thẻ video
@@ -285,8 +284,6 @@ async def extract_pinterest_media(pin_url):
                     try:
                         # Xử lý script dạng JSON
                         script_content = script.string or script.text
-                        data = None
-
                         try:
                             data = json.loads(script_content)
                         except json.JSONDecodeError:
@@ -332,40 +329,18 @@ async def extract_pinterest_media(pin_url):
                                     urls.extend(re.findall(pattern, obj))
                             return urls
 
-                        if data:
-                            found_urls = find_video_urls(data)
-                            if found_urls:
-                                log(f'🎥 Tìm thấy {len(found_urls)} URL video trong script')
-                                video_candidates.extend(found_urls)
+                        found_urls = find_video_urls(data)
+                        if found_urls:
+                            log(f'🎥 Tìm thấy {len(found_urls)} URL video trong script')
+                            video_candidates.extend(found_urls)
 
                     except Exception as e:
                         log(f'⚠️ Lỗi khi xử lý script: {e}')
-
-                # Clean up video URLs
-                video_candidates = [url for url in set(video_candidates) if url]  # Remove duplicates and empty URLs
-                video_candidates = [url.replace('\\u002F', '/').replace('\\/', '/') for url in video_candidates]  # Clean URLs
-                video_candidates = [url if url.startswith('http') else f'https:{url}' for url in video_candidates]  # Add protocol
-
-                # First try direct video URLs
-                best_video = {'url': None, 'size': 0}
-                for video_url in video_candidates:
-                    try:
-                        async with session.head(video_url, headers=headers) as resp:
-                            if resp.status == 200:
-                                size = int(resp.headers.get('content-length', 0))
-                                if size > best_video['size']:
-                                    best_video = {'url': video_url, 'size': size}
-                                    log(f'📈 Tìm thấy video chất lượng tốt: {video_url} ({size/1024/1024:.1f}MB)')
-                    except Exception as e:
-                        log(f'⚠️ Lỗi khi kiểm tra video URL {video_url}: {e}')
                         continue
 
-                if best_video['url']:
-                    log(f'✅ Sử dụng video trực tiếp: {best_video["url"]}')
-                    return 'video', best_video['url']
-
-                # If no direct URL works, try quality variants
-                for video_url in video_candidates:
+                # Tìm phiên bản chất lượng cao nhất
+                best_video = {'url': None, 'size': 0}
+                for video_url in set(video_candidates):  # Loại bỏ trùng lặp
                     base_url = video_url.split('/hls/')[0] if '/hls/' in video_url else video_url.rsplit('/', 1)[0]
                     quality_variants = [
                         ('/originals/', '.mp4'),
@@ -390,106 +365,91 @@ async def extract_pinterest_media(pin_url):
                         except:
                             continue
                 
-                # Return best video found or first available
                 if best_video['url']:
-                    log(f'✅ Sử dụng video chất lượng cao nhất: {best_video["url"]}')
                     return 'video', best_video['url']
-                elif video_candidates:
-                    log(f'⚠️ Sử dụng video đầu tiên: {video_candidates[0]}')
-                    return 'video', video_candidates[0]
-                
-                log('❌ Không tìm thấy video hợp lệ, thử tìm ảnh...')
 
-            # Tìm ảnh với chất lượng cao nhất
-            img_sources = []
-            
-            # Kiểm tra các meta tags khác nhau
-            meta_tags = [
-                ("meta", {"property": "og:image"}),
-                ("meta", {"name": "twitter:image"}),
-                ("meta", {"name": "pinterest:image"}),
-                ("meta", {"property": "og:image:url"}),
-                ("link", {"rel": "image_src"})
-            ]
-            
-            log("🔍 Tìm kiếm ảnh trong meta tags...")
-            for tag, attrs in meta_tags:
-                elem = soup.find(tag, attrs)
-                if elem:
-                    url = elem.get('content') or elem.get('href')
-                    if url:
-                        # Chuyển đổi URL sang độ phân giải cao nhất
-                        if 'pinimg.com' in url:
-                            # Thay thế kích thước ảnh để lấy bản chất lượng cao nhất
-                            url = re.sub(r'/\d+x/', '/originals/', url)
-                            log(f'🔄 Nâng cấp ảnh lên chất lượng cao nhất: {url}')
-                        img_sources.append(url)
-                        log(f'✅ Tìm thấy ảnh từ {tag}: {url}')
-
-            log("🔍 Tìm kiếm ảnh trong thẻ img...")
-            # Tìm tất cả thẻ img có độ phân giải cao
-            for img in soup.find_all("img"):
-                src = img.get('src', '')
-                if not src:
-                    continue
+            # Chỉ tìm ảnh nếu không phải là video
+            if not is_video:
+                img_sources = []
                 
-                # Chuyển đổi URL sang độ phân giải cao nhất nếu là ảnh Pinterest
-                if 'pinimg.com' in src:
-                    src = re.sub(r'/\d+x/', '/originals/', src)
+                # Kiểm tra các meta tags khác nhau
+                meta_tags = [
+                    ("meta", {"property": "og:image"}),
+                    ("meta", {"name": "twitter:image"}),
+                    ("meta", {"name": "pinterest:image"}),
+                    ("meta", {"property": "og:image:url"}),
+                    ("link", {"rel": "image_src"})
+                ]
+                
+                log("🔍 Tìm kiếm ảnh trong meta tags...")
+                for tag, attrs in meta_tags:
+                    elem = soup.find(tag, attrs)
+                    if elem:
+                        url = elem.get('content') or elem.get('href')
+                        if url:
+                            if 'pinimg.com' in url:
+                                url = re.sub(r'/\d+x/', '/originals/', url)
+                                log(f'🔄 Nâng cấp ảnh lên chất lượng cao nhất: {url}')
+                            img_sources.append(url)
+                            log(f'✅ Tìm thấy ảnh từ {tag}: {url}')
+
+                log("🔍 Tìm kiếm ảnh trong thẻ img...")
+                for img in soup.find_all("img"):
+                    src = img.get('src', '')
+                    if not src:
+                        continue
                     
-                # Ưu tiên các ảnh độ phân giải cao
-                if any(x in src.lower() for x in ['original', 'fullsize', '1200x', '736x']):
-                    img_sources.append(src)
-                    log(f'✅ Tìm thấy ảnh chất lượng cao: {src}')
-                elif 'src' in img.attrs:
-                    img_sources.append(src)
-                    log(f'✅ Tìm thấy ảnh: {src}')
+                    if 'pinimg.com' in src:
+                        src = re.sub(r'/\d+x/', '/originals/', src)
+                    
+                    if any(x in src.lower() for x in ['original', 'fullsize', '1200x', '736x']):
+                        img_sources.append(src)
+                        log(f'✅ Tìm thấy ảnh chất lượng cao: {src}')
+                    elif 'src' in img.attrs:
+                        img_sources.append(src)
+                        log(f'✅ Tìm thấy ảnh: {src}')
 
-            # Chọn ảnh có độ phân giải cao nhất
-            log(f"🔍 Đánh giá {len(img_sources)} ảnh tìm thấy...")
-            best_image = None
-            max_resolution = 0
+                # Chọn ảnh có độ phân giải cao nhất
+                log(f"🔍 Đánh giá {len(img_sources)} ảnh tìm thấy...")
+                best_image = None
+                max_resolution = 0
 
-            for img_url in img_sources:
-                try:
-                    # Nếu là ảnh gốc, ưu tiên sử dụng ngay
-                    if 'originals' in img_url:
-                        log(f'🎯 Tìm thấy ảnh gốc: {img_url}')
-                        return 'image', img_url
+                for img_url in img_sources:
+                    try:
+                        if 'originals' in img_url:
+                            log(f'🎯 Tìm thấy ảnh gốc: {img_url}')
+                            return 'image', img_url
 
-                    # Chuyển đổi URL sang độ phân giải cao nhất nếu là ảnh Pinterest
-                    if 'pinimg.com' in img_url:
-                        original_url = re.sub(r'/\d+x/', '/originals/', img_url)
-                        log(f'🔄 Thử truy cập ảnh gốc: {original_url}')
-                        try:
-                            async with session.head(original_url, headers=headers) as response:
-                                if response.status == 200:
-                                    log(f'✅ Ảnh gốc khả dụng!')
-                                    return 'image', original_url
-                        except:
-                            log('⚠️ Không thể truy cập ảnh gốc, dùng ảnh thay thế')
+                        if 'pinimg.com' in img_url:
+                            original_url = re.sub(r'/\d+x/', '/originals/', img_url)
+                            log(f'🔄 Thử truy cập ảnh gốc: {original_url}')
+                            try:
+                                async with session.head(original_url, headers=headers) as response:
+                                    if response.status == 200:
+                                        log(f'✅ Ảnh gốc khả dụng!')
+                                        return 'image', original_url
+                            except:
+                                log('⚠️ Không thể truy cập ảnh gốc, dùng ảnh thay thế')
 
-                    # Kiểm tra độ phân giải
-                    res_match = re.search(r'(\d+)x(\d+)', img_url)
-                    if res_match:
-                        resolution = int(res_match.group(1)) * int(res_match.group(2))
-                        log(f'📏 Ảnh {img_url} có độ phân giải: {res_match.group(1)}x{res_match.group(2)}')
-                        if resolution > max_resolution:
-                            max_resolution = resolution
-                            best_image = img_url
-                            log(f'📈 Cập nhật ảnh chất lượng cao nhất: {img_url}')
-                except Exception as e:
-                    log(f'⚠️ Lỗi khi xử lý ảnh {img_url}: {e}')
-                    continue
+                        res_match = re.search(r'(\d+)x(\d+)', img_url)
+                        if res_match:
+                            resolution = int(res_match.group(1)) * int(res_match.group(2))
+                            log(f'📏 Ảnh {img_url} có độ phân giải: {res_match.group(1)}x{res_match.group(2)}')
+                            if resolution > max_resolution:
+                                max_resolution = resolution
+                                best_image = img_url
+                                log(f'📈 Cập nhật ảnh chất lượng cao nhất: {img_url}')
+                    except Exception as e:
+                        log(f'⚠️ Lỗi khi xử lý ảnh {img_url}: {e}')
+                        continue
 
-            if best_image:
-                log(f'✅ Chọn ảnh tốt nhất: {best_image}')
-                return 'image', best_image
-            
-            # Nếu không tìm thấy ảnh nào phù hợp, thử dùng ảnh đầu tiên
-            if img_sources:
-                log(f'⚠️ Không tìm được ảnh chất lượng cao, dùng ảnh đầu tiên: {img_sources[0]}')
-                return 'image', img_sources[0]
+                if best_image:
+                    log(f'✅ Chọn ảnh tốt nhất: {best_image}')
+                    return 'image', best_image
+                
+                if img_sources:
+                    log(f'⚠️ Không tìm được ảnh chất lượng cao, dùng ảnh đầu tiên: {img_sources[0]}')
+                    return 'image', img_sources[0]
 
     except Exception as e:
         log(f'Lỗi khi trích xuất media: {e}')
@@ -526,6 +486,7 @@ async def handler(event):
         links = re.findall(r'(https?://(?:www\.)?(?:pinterest\.com/(?:[^\s]+|i/[^\s/]+)|pin\.it/[^\s]+))', text)
         if not links:
             return
+
         log(f'Phát hiện {len(links)} link Pinterest trong {chat_info}')
         await event.reply("🔍 Đang xử lý link Pinterest của bạn...")
 

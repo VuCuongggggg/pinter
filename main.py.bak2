@@ -1,5 +1,4 @@
-﻿# -*- coding: utf-8 -*-
-import os
+﻿import os
 import re
 import json
 import aiohttp
@@ -11,7 +10,6 @@ from telethon import TelegramClient, events
 from functools import lru_cache
 from PIL import Image
 from io import BytesIO
-import brotli  # Add Brotli import
 
 # ====== CONFIG ======
 CONFIG_FILE = 'bot_config.json'
@@ -74,8 +72,8 @@ api_id = config['api_id']
 api_hash = config['api_hash']
 
 # ====== LOGGING SETUP ======
-def log(msg, end='\n'):
-    print(f'[🌀] {msg}', end=end)
+def log(msg):
+    print(f'[🌀] {msg}')
 
 # ====== TELETHON SETUP ======
 client = TelegramClient('session', api_id, api_hash)
@@ -87,20 +85,7 @@ session = None
 async def get_session():
     global session
     if session is None:
-        try:
-            # Try to configure session with AsyncResolver
-            connector = aiohttp.TCPConnector(
-                resolver=aiohttp.AsyncResolver(),
-                ssl=False,
-                use_dns_cache=True
-            )
-            session = aiohttp.ClientSession(connector=connector)
-        except Exception as e:
-            log(f"⚠️ Không thể sử dụng AsyncResolver, dùng cấu hình mặc định: {e}")
-            # Fallback to default configuration
-            session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(ssl=False)
-            )
+        session = aiohttp.ClientSession()
     return session
 
 # ====== DOWNLOAD FUNCTION ======
@@ -112,44 +97,45 @@ async def download_file(url, filename, max_retries=3):
     while retry_count < max_retries:
         try:
             session = await get_session()
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': '*/*',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive'
-            }
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url) as response:
                 response.raise_for_status()
                 total_size = int(response.headers.get('content-length', 0))
                 
-                if url.endswith('.jpg') or url.endswith('.png') or url.endswith('.jpeg') or url.endswith('.webp'):
+                if url.endswith('.jpg') or url.endswith('.png'):
+                    # Download image data
                     log('📥 Đang tải dữ liệu ảnh...')
                     data = await response.read()
+                    
+                    # Process image in memory
+                    log('🖼️ Đang xử lý ảnh...')
                     img = Image.open(BytesIO(data))
                     
-                    # Convert WEBP to JPEG if needed
-                    if url.endswith('.webp'):
-                        img = img.convert('RGB')
-                    
+                    # Get original size
                     width, height = img.size
                     log(f'📏 Kích thước gốc: {width}x{height}')
                     
-                    # Calculate target size (4K or larger)
-                    if max(width, height) < 3840:
-                        scale = 3840 / max(width, height)
-                        new_width = int(width * scale)
-                        new_height = int(height * scale)
-                        log(f'🔄 Nâng cấp ảnh lên {new_width}x{new_height}')
-                        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    # Tính toán kích thước 4K với tỷ lệ khung hình gốc
+                    target_height = 2160  # 4K height
+                    target_width = int((width / height) * target_height)
+                    target_width = max(3840, target_width)  # Đảm bảo ít nhất 4K width
+                    
+                    # Upscale to 4K
+                    log(f'� Nâng cấp lên 4K: {target_width}x{target_height}')
+                    img = img.resize((target_width, target_height), Image.Resampling.LANCZOS)
                     
                     # Save with maximum quality
                     log('💾 Đang lưu ảnh chất lượng cao...')
-                    img.save(filename, 'JPEG', quality=100, optimize=True, subsampling=0)
+                    img = img.convert('RGB')
+                    output = BytesIO()
+                    img.save(output, 'JPEG', quality=100, subsampling=0)  # Tắt chroma subsampling để giữ chất lượng tối đa
+                    
+                    # Write to file
+                    with open(filename, 'wb') as f:
+                        f.write(output.getvalue())
                     
                     log(f'✨ Đã lưu ảnh chất lượng cao: {filename}')
                 else:
-                    # For videos and other files
-                    log('📥 Đang tải video/file...')
+                    # For videos and other files - use streaming download
                     downloaded = 0
                     with open(filename, 'wb') as f:
                         async for chunk in response.content.iter_chunked(chunk_size):
@@ -157,7 +143,7 @@ async def download_file(url, filename, max_retries=3):
                             downloaded += len(chunk)
                             if total_size:
                                 progress = (downloaded / total_size) * 100
-                                log(f'\r📥 Tải xuống: {progress:.1f}% ({downloaded/1024/1024:.1f}/{total_size/1024/1024:.1f}MB)', end='')
+                                log(f'\r📥 Tải xuống: {progress:.1f}% ({downloaded}/{total_size} bytes)', end='\r')
                 
                 log(f'✅ Tải xuống hoàn tất: {filename}')
                 return True
@@ -182,56 +168,27 @@ async def extract_pinterest_media(pin_url):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
         'Accept': '*/*',
         'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Cookie': '_auth=1'  # Thêm cookie để cải thiện khả năng truy cập
+        'Connection': 'keep-alive'
     }
     session = await get_session()
     log(f'➡ Đang xử lý link: {pin_url}')
 
     try:
-        # Handle short links with retries
+        # Check if it's a short link format
         if 'pin.it' in pin_url or '/i/' in pin_url:
-            retry_count = 0
-            max_retries = 3
-            while retry_count < max_retries:
-                try:
-                    log(f'🔄 Đang giải quyết link ngắn (lần thử {retry_count + 1})...')
-                    timeout = aiohttp.ClientTimeout(total=10)  # 10 seconds timeout
-                    async with session.get(pin_url, headers=headers, allow_redirects=True, timeout=timeout) as response:
-                        if response.status == 200:
-                            # Get the final URL after redirects
-                            final_url = str(response.url)
-                            log(f'➡ Link gốc: {final_url}')
-                            
-                            # Try to find canonical URL from the page
-                            content = await response.text()
-                            soup = BeautifulSoup(content, "html.parser")
-                            meta = soup.find("link", rel="canonical")
-                            if meta and meta.get('href'):
-                                final_url = meta['href']
-                                log(f'➡ Link chính thức: {final_url}')
-                            
-                            # Update pin_url to the resolved URL if it's valid
-                            if 'pinterest.com' in final_url:
-                                pin_url = final_url
-                                break
-                            else:
-                                log('⚠️ Link đích không phải Pinterest, thử lại...')
-                        else:
-                            log(f'⚠️ Lỗi HTTP {response.status}, thử lại...')
-                    
-                except asyncio.TimeoutError:
-                    log('⚠️ Hết thời gian chờ, thử lại...')
-                except Exception as e:
-                    log(f'⚠️ Lỗi khi giải quyết link ngắn: {e}')
+            async with session.get(pin_url, headers=headers) as response:
+                # Follow redirects to get the final URL
+                pin_url = str(response.url)
+                log(f'➡ Link gốc: {pin_url}')
                 
-                retry_count += 1
-                if retry_count < max_retries:
-                    wait_time = 2 ** retry_count
-                    log(f'⌛ Chờ {wait_time}s trước khi thử lại...')
-                    await asyncio.sleep(wait_time)
-                else:
-                    log('❌ Không thể giải quyết link ngắn sau nhiều lần thử')
+                if response.status == 200:
+                    content = await response.text()
+                    # Try to find canonical URL
+                    soup = BeautifulSoup(content, "html.parser")
+                    meta = soup.find("link", rel="canonical")
+                    if meta and meta.get('href'):
+                        pin_url = meta['href']
+                        log(f'➡ Link chính thức: {pin_url}')
 
         async with session.get(pin_url, headers=headers) as response:
             if response.status != 200:
@@ -239,133 +196,46 @@ async def extract_pinterest_media(pin_url):
             content = await response.text()
             soup = BeautifulSoup(content, 'html.parser')
 
-            # Kiểm tra xem có phải là video không
-            is_video = False
-            video_candidates = []
-            
-            # Phương pháp 1: Kiểm tra meta tags
-            for meta in soup.find_all('meta', property=['og:type', 'og:video:type']):
-                if 'video' in meta.get('content', '').lower():
-                    is_video = True
-                    log('🎥 Phát hiện video qua meta tags...')
-                    break
-
-            # Phương pháp 2: Kiểm tra thẻ video
+            # Tìm video với chất lượng cao nhất
             video_tag = soup.find("video")
             if video_tag:
-                is_video = True
-                log('🎥 Phát hiện video qua thẻ video...')
-
-            # Phương pháp 3: Kiểm tra trong dữ liệu JSON
-            for script in soup.find_all('script', type='text/javascript'):
-                if 'videoList' in script.text or '"type":"video"' in script.text:
-                    is_video = True
-                    log('🎥 Phát hiện video qua dữ liệu JSON...')
-                    break
-
-            if is_video:
-                log('🎥 Xác nhận đây là video Pinterest, đang quét tất cả nguồn...')
+                log('🎥 Phát hiện video, đang quét tất cả nguồn...')
+                video_candidates = []
                 
-                # Thu thập nguồn video từ thẻ video
-                if video_tag:
-                    if 'src' in video_tag.attrs:
-                        video_candidates.append(video_tag['src'])
-                    
-                    for source in video_tag.find_all('source'):
-                        if source.get('src'):
-                            video_candidates.append(source['src'])
+                # Thu thập tất cả nguồn video có thể
+                if 'src' in video_tag.attrs:
+                    video_candidates.append(video_tag['src'])
                 
-                # Thu thập từ meta tags
-                for meta in soup.find_all('meta', property=['og:video', 'og:video:url', 'og:video:secure_url']):
-                    if meta.get('content'):
-                        video_candidates.append(meta['content'])
+                # Thu thập từ thẻ source
+                for source in video_tag.find_all('source'):
+                    if source.get('src'):
+                        video_candidates.append(source['src'])
                 
                 # Thu thập từ script data
-                for script in soup.find_all('script', type=['application/json', 'text/javascript']):
+                for script in soup.find_all('script', type='application/json'):
                     try:
-                        # Xử lý script dạng JSON
-                        script_content = script.string or script.text
-                        data = None
-
-                        try:
-                            data = json.loads(script_content)
-                        except json.JSONDecodeError:
-                            # Nếu không phải JSON, dùng văn bản gốc
-                            data = script_content
-
-                        def find_video_urls(obj):
-                            urls = []
-                            if isinstance(obj, dict):
-                                # Tìm kiếm các trường video cụ thể của Pinterest
-                                video_fields = ['video_url', 'videoUrl', 'url', 'high_res_url']
-                                for field in video_fields:
-                                    if field in obj and isinstance(obj[field], str):
-                                        if any(ext in obj[field].lower() for ext in ['.mp4', '.m3u8']):
-                                            urls.append(obj[field])
-                                
-                                # Tìm trong các đối tượng video
-                                if 'videos' in obj:
-                                    if isinstance(obj['videos'], dict):
-                                        for video_data in obj['videos'].values():
-                                            if isinstance(video_data, dict) and 'url' in video_data:
-                                                urls.append(video_data['url'])
-                                    elif isinstance(obj['videos'], list):
-                                        for video_data in obj['videos']:
-                                            if isinstance(video_data, dict) and 'url' in video_data:
-                                                urls.append(video_data['url'])
-                                
-                                # Đệ quy tìm trong các đối tượng con
-                                for v in obj.values():
-                                    if isinstance(v, (dict, list)):
-                                        urls.extend(find_video_urls(v))
-                            elif isinstance(obj, list):
-                                for item in obj:
-                                    urls.extend(find_video_urls(item))
-                            elif isinstance(obj, str):
-                                # Tìm URL video trong chuỗi văn bản
-                                video_patterns = [
-                                    r'https?://[^"\']+?\.mp4[^"\']*',
-                                    r'https?://[^"\']+?/video/[^"\']+',
-                                    r'https?://v\.pinimg\.com[^"\']+',
-                                ]
-                                for pattern in video_patterns:
-                                    urls.extend(re.findall(pattern, obj))
-                            return urls
-
-                        if data:
-                            found_urls = find_video_urls(data)
-                            if found_urls:
-                                log(f'🎥 Tìm thấy {len(found_urls)} URL video trong script')
-                                video_candidates.extend(found_urls)
-
-                    except Exception as e:
-                        log(f'⚠️ Lỗi khi xử lý script: {e}')
-
-                # Clean up video URLs
-                video_candidates = [url for url in set(video_candidates) if url]  # Remove duplicates and empty URLs
-                video_candidates = [url.replace('\\u002F', '/').replace('\\/', '/') for url in video_candidates]  # Clean URLs
-                video_candidates = [url if url.startswith('http') else f'https:{url}' for url in video_candidates]  # Add protocol
-
-                # First try direct video URLs
-                best_video = {'url': None, 'size': 0}
-                for video_url in video_candidates:
-                    try:
-                        async with session.head(video_url, headers=headers) as resp:
-                            if resp.status == 200:
-                                size = int(resp.headers.get('content-length', 0))
-                                if size > best_video['size']:
-                                    best_video = {'url': video_url, 'size': size}
-                                    log(f'📈 Tìm thấy video chất lượng tốt: {video_url} ({size/1024/1024:.1f}MB)')
-                    except Exception as e:
-                        log(f'⚠️ Lỗi khi kiểm tra video URL {video_url}: {e}')
+                        data = json.loads(script.string)
+                        if isinstance(data, dict):
+                            # Tìm URL video trong dữ liệu JSON
+                            def find_video_urls(obj):
+                                urls = []
+                                if isinstance(obj, dict):
+                                    for k, v in obj.items():
+                                        if isinstance(v, str) and any(ext in v.lower() for ext in ['.mp4', '.m3u8']):
+                                            urls.append(v)
+                                        elif isinstance(v, (dict, list)):
+                                            urls.extend(find_video_urls(v))
+                                elif isinstance(obj, list):
+                                    for item in obj:
+                                        urls.extend(find_video_urls(item))
+                                return urls
+                            video_candidates.extend(find_video_urls(data))
+                    except:
                         continue
 
-                if best_video['url']:
-                    log(f'✅ Sử dụng video trực tiếp: {best_video["url"]}')
-                    return 'video', best_video['url']
-
-                # If no direct URL works, try quality variants
-                for video_url in video_candidates:
+                # Tìm phiên bản chất lượng cao nhất
+                best_video = {'url': None, 'size': 0}
+                for video_url in set(video_candidates):  # Loại bỏ trùng lặp
                     base_url = video_url.split('/hls/')[0] if '/hls/' in video_url else video_url.rsplit('/', 1)[0]
                     quality_variants = [
                         ('/originals/', '.mp4'),
@@ -390,15 +260,8 @@ async def extract_pinterest_media(pin_url):
                         except:
                             continue
                 
-                # Return best video found or first available
                 if best_video['url']:
-                    log(f'✅ Sử dụng video chất lượng cao nhất: {best_video["url"]}')
                     return 'video', best_video['url']
-                elif video_candidates:
-                    log(f'⚠️ Sử dụng video đầu tiên: {video_candidates[0]}')
-                    return 'video', video_candidates[0]
-                
-                log('❌ Không tìm thấy video hợp lệ, thử tìm ảnh...')
 
             # Tìm ảnh với chất lượng cao nhất
             img_sources = []
@@ -523,9 +386,10 @@ async def handler(event):
         chat_info = f'Chat ID: {chat.id} ({"Group" if hasattr(chat, "title") else "Private"})'
         
         # Tìm tất cả các link Pinterest trong tin nhắn
-        links = re.findall(r'(https?://(?:www\.)?(?:pinterest\.com/(?:[^\s]+|i/[^\s/]+)|pin\.it/[^\s]+))', text)
+        links = re.findall(r'(https?://(?:www\.)?(?:pinterest\.com/[^\s]+|pin\.it/[^\s]+))', text)
         if not links:
             return
+
         log(f'Phát hiện {len(links)} link Pinterest trong {chat_info}')
         await event.reply("🔍 Đang xử lý link Pinterest của bạn...")
 
