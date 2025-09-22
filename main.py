@@ -76,16 +76,9 @@ api_id = config['api_id']
 api_hash = config['api_hash']
 
 # ====== LOGGING SETUP ======
-log_format = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_format)
-logger = logging.getLogger('PinterestBot')
-logger.addHandler(console_handler)
-logger.setLevel(logging.INFO)
-
-def log(msg, level=logging.INFO):
-    """Enhanced logging function"""
-    logger.log(level, msg)
+def log(msg):
+    """Simple logging function"""
+    print(f'[🌀] {msg}')
 
 # ====== TELETHON SETUP ======
 client = TelegramClient('session', api_id, api_hash)
@@ -267,14 +260,12 @@ async def handler(event):
                 elif file_type == 'image':
                     filename += '.jpg'
 
-                if await download_file(url, filename):
-                    processed.append(filename)
-                    log(f'✅ Đã tải thành công: {url}')
-                else:
-                    log(f'❌ Không thể tải: {url}', level=logging.ERROR)
-
-            except Exception as e:
-                log(f'❌ Lỗi khi xử lý {link}: {e}', level=logging.ERROR)
+            if await download_file(url, filename):
+                processed.append(filename)
+                log(f'✅ Đã tải thành công: {url}')
+            else:
+                log(f'❌ Không thể tải: {url}')            except Exception as e:
+                log(f'❌ Lỗi khi xử lý {link}: {e}')
 
         if processed:
             # Gửi tất cả file đã xử lý
@@ -287,14 +278,14 @@ async def handler(event):
                     os.remove(filename)
                     log(f'🧹 Đã xoá file: {filename}')
                 except Exception as e:
-                    log(f'Lỗi khi xoá file {filename}: {e}', level=logging.ERROR)
+                    log(f'Lỗi khi xoá file {filename}: {e}')
         else:
             await event.reply("❌ Không tìm thấy ảnh hoặc video hợp lệ.")
-            log(f'⚠️ Không tìm thấy media hợp lệ trong {chat_info}', level=logging.WARNING)
+            log(f'⚠️ Không tìm thấy media hợp lệ trong {chat_info}')
 
     except Exception as e:
         await event.reply(f"❌ Đã xảy ra lỗi: {e}")
-        log(f'❌ Lỗi: {e}', level=logging.ERROR)
+        log(f'❌ Lỗi: {e}')
 
 # ====== START BOT ======
 async def main():
@@ -309,7 +300,7 @@ async def main():
         
         await client.run_until_disconnected()
     except Exception as e:
-        log(f"❌ Lỗi khởi động bot: {e}", level=logging.ERROR)
+        log(f"❌ Lỗi khởi động bot: {e}")
     finally:
         if session:
             await session.close()
@@ -319,6 +310,6 @@ if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        log("👋 Bot đã dừng bởi người dùng", level=logging.WARNING)
+        log("👋 Bot đã dừng bởi người dùng")
     except Exception as e:
-        log(f"❌ Lỗi không mong muốn: {e}", level=logging.ERROR)
+        log(f"❌ Lỗi không mong muốn: {e}")
