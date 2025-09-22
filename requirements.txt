@@ -1,3 +1,6 @@
-requests
+aiohttp
 beautifulsoup4
+pillow
+telethon
+requests
 tqdm

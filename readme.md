@@ -23,11 +23,18 @@ pip install requests beautifulsoup4 tqdm
 
 To use this script:
 1. Make sure you have all dependencies installed.
-2. Run the script using python command in terminal:
+2. Configure the bot:
+   - When running for the first time, you'll be prompted to enter:
+     - Telegram API ID
+     - Telegram API Hash
+     - Target Group ID (where media will be sent)
+   - These settings will be saved in `bot_config.json`
+   - You can reconfigure anytime by deleting `bot_config.json`
+3. Run the script using python command in terminal:
     ```shell
     python main.py
     ```
-3. Enter the Pinterest page URL when prompted.
+4. The bot will start and process any Pinterest links sent to it.
 
 The script will validate the URL and extract the video source. It will then download the video as an MP4 file, with the current date and time as part of the filename.
 
